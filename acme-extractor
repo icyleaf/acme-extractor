@@ -1,0 +1,170 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "optparse"
+require "logger"
+require "base64"
+require "digest"
+require "json"
+
+class AcmeExtractor
+  def self.run
+    new.run
+  end
+
+  VERSION = "0.1.0"
+  FORMATS = %w[pem crt]
+  LOG_LEVELS = %w[debug info warn error]
+
+  attr_reader :options
+
+  def initialize(interval = 2)
+    @options = {}
+    @interval = interval
+
+    _do_parser
+  end
+
+  def run
+    determine_file!
+    return dump_certs unless enabled_watch
+
+    watch_file_changes do
+      dump_certs
+    end
+  end
+
+  def dump_certs
+    read_certs do |key, certs|
+      logger.debug "Certificates in key #{key}"
+      certs.each do |cert|
+        domain = cert["domain"]["main"]
+        has_sni = cert["domain"].key?("sans")
+        logger.info "Dump domain #{domain}, has_sni: #{has_sni}"
+
+        certificate = cert["certificate"]
+        key = cert["key"]
+
+        write_cert(certificate, domain: domain, type: :cert)
+        write_cert(key, domain: domain, type: :key)
+      end
+    end
+  end
+
+  private
+
+  def write_cert(content, domain:, type:)
+    logger.info "Write #{domain} #{type}"
+
+    extname = format == :crt ? ".crt" : ".pem"
+    content = Base64.decode64(content) if format == :crt
+    filename = type == :cert ? "certificate" : "private_key"
+
+    file = output_path(domain, "#{filename}#{extname}")
+    logger.debug "Full write path: #{file}"
+
+    File.write(file, content)
+  end
+
+  def watch_file_changes
+    old_hash_key = hash_key
+    new_hash_key = nil
+
+    logger.debug "Watch file changes interval: #{@interval} seconds"
+    loop do
+      if old_hash_key != new_hash_key
+        unless new_hash_key.nil?
+          old_hash_key = new_hash_key
+          logger.info "File changes."
+        end
+
+        yield
+      else
+        logger.debug "No changes"
+      end
+
+      new_hash_key = hash_key(force: true)
+      sleep @interval
+    end
+  end
+
+  def read_certs
+    JSON.load(contents).each do |key, data|
+      yield key, data["Certificates"]
+    end
+  end
+
+  def determine_file!
+    logger.debug "File path: #{File.expand_path(file)}"
+    if file.to_s.empty? || !File.file?(file)
+      logger.error "file is missing"
+      exit
+    end
+
+    logger.debug "Loading file: #{file}"
+  end
+
+  def _do_parser
+    OptionParser.new do |parser|
+      parser.on("--file FILE", "-f FILE", "The path of amce.json", String)
+      parser.on("--output PATH", "-o PATH", "The path of write cert files (default path: .)", String)
+      parser.on("--format FORMAT", FORMATS, "Certificate storage format, avaiables in (default value: pem)", "(#{FORMATS.join("/")})", String)
+      parser.on("--watch", "Enable file change to extract cert files")
+      parser.on("--log-level LEVEL", LOG_LEVELS, "Set log level, avaiables in (default value: info)", "(#{LOG_LEVELS.join("/")})", String)
+      parser.on("--version", "-v", "Show version") do
+        puts "acme-extractor #{VERSION}"
+        puts RUBY_DESCRIPTION
+        exit
+      end
+    end.parse!(into: @options)
+  end
+
+  def output_path(*paths)
+    output_base = File.expand_path(options[:output] || ".")
+    full_path = File.join(output_base, *paths)
+    FileUtils.mkdir_p File.dirname(full_path)
+    full_path
+  end
+
+  def logger
+    @logger ||= Logger.new(STDOUT, level: log_level)
+  end
+
+  def log_level
+    @log_level ||= (options[:"log-level"] || "info").to_sym
+  end
+
+  def hash_key(force: false)
+    Digest::SHA256.hexdigest(contents(force: force))
+  end
+
+  def contents(force: false)
+    @contents ||= read_file
+    @contents = read_file if force
+    @contents
+  end
+
+  def read_file
+    File.read(@file)
+  end
+
+  def file
+    @file ||= options[:file]
+  end
+
+  def format
+    @format ||= (options[:format] || "pem").to_sym
+  end
+
+  def enabled_watch
+    !!options[:watch]
+  end
+end
+
+Signal.trap("INT") do |signo|
+  # do nothing, exit silent.
+  exit
+end
+
+AcmeExtractor.run
