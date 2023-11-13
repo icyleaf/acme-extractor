@@ -1,0 +1,15 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    filewatcher (2.1.0)
+      module_methods (~> 0.1.0)
+    module_methods (0.1.0)
+
+PLATFORMS
+  x86_64-darwin-22
+
+DEPENDENCIES
+  filewatcher
+
+BUNDLED WITH
+   2.4.21

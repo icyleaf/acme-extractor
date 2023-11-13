@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "filewatcher"
 require "fileutils"
 require "optparse"
 require "logger"
@@ -13,15 +14,14 @@ class AcmeExtractor
     new.run
   end
 
-  VERSION = "0.1.0"
+  VERSION = "0.2.0"
   FORMATS = %w[pem crt]
   LOG_LEVELS = %w[debug info warn error]
 
   attr_reader :options
 
-  def initialize(interval = 2)
+  def initialize
     @options = {}
-    @interval = interval
 
     _do_parser
   end
@@ -71,21 +71,22 @@ class AcmeExtractor
     old_hash_key = hash_key
     new_hash_key = nil
 
-    logger.debug "Watch file changes interval: #{@interval} seconds"
-    loop do
-      if old_hash_key != new_hash_key
-        unless new_hash_key.nil?
-          old_hash_key = new_hash_key
-          logger.info "File changes."
+    logger.info "Watch file changes [enabled]"
+    Filewatcher.new(File.expand_path(file)).watch do |changes|
+      changes.each do |filename, event|
+        if old_hash_key != new_hash_key
+          unless new_hash_key.nil?
+            old_hash_key = new_hash_key
+            logger.debug "File changes, event: #{event}"
+          end
+
+          yield
+        else
+          logger.debug "No changes"
         end
 
-        yield
-      else
-        logger.debug "No changes"
+        new_hash_key = hash_key(force: true)
       end
-
-      new_hash_key = hash_key(force: true)
-      sleep @interval
     end
   end
 
@@ -96,9 +97,8 @@ class AcmeExtractor
   end
 
   def determine_file!
-    logger.debug "File path: #{File.expand_path(file)}"
     if file.to_s.empty? || !File.file?(file)
-      logger.error "file is missing"
+      logger.error "file is missing or not passed."
       exit
     end
 

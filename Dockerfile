@@ -2,6 +2,7 @@ FROM --platform=$BUILDPLATFORM ruby:3-alpine
 
 WORKDIR /app
 
-COPY acme-extractor /usr/bin/acme-extractor
+COPY acme-extractor Gemfile Gemfile.lock /app/
+RUN bundle install
 
-ENTRYPOINT ["/usr/bin/acme-extractor"]
+ENTRYPOINT ["/app/acme-extractor"]
